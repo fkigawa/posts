@@ -350,6 +350,47 @@ footer.site-foot a { color: var(--ink-faint); border-bottom-color: var(--rule-so
 }
 .back:hover { color: var(--accent); }
 
+/* section break between LinkedIn post and instructions */
+.section-break {
+  margin: 72px 0 48px;
+  padding-top: 32px;
+  border-top: 1px solid var(--rule);
+  text-align: center;
+}
+.section-break .eyebrow {
+  margin: 0 0 8px;
+}
+.section-break h2 {
+  font-size: 30px;
+  margin: 0 auto 12px;
+  border: none;
+  padding: 0;
+  letter-spacing: -0.005em;
+  max-width: 600px;
+}
+.section-break .section-dek {
+  font-size: 16px;
+  color: var(--ink-soft);
+  font-style: italic;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+/* lead paragraph (LinkedIn post opener) */
+.lead {
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--ink);
+  margin: 0 0 24px;
+}
+
+.post-body p {
+  font-size: 18px;
+  line-height: 1.7;
+  color: var(--ink);
+  margin: 0 0 22px;
+}
+
 @media (max-width: 600px) {
   .wrap, .wrap-wide { padding: 40px 20px 64px; }
   h1.title { font-size: 32px; }

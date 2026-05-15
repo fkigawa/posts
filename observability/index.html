@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Build a Custom Observability System — Posts</title>
+<title>I spent 1 day building out in-house observability — Posts</title>
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
@@ -12,18 +12,31 @@
 <a href="../" class="back">← all posts</a>
 
 <header class="masthead">
-  <p class="eyebrow">Coding agent prompt</p>
-  <h1 class="title">Build a Custom Observability System for Your App</h1>
-  <p class="dek">A sequence of prompts you hand to a coding agent (Claude Code, Cursor, etc.) one at a time, in order. Each one builds on the previous. Copy, paste, run, move to the next.</p>
+  <p class="eyebrow">Post · May 2026</p>
+  <h1 class="title">I spent 1 day building out in-house observability, and now I can diagnose and fix bugs 100x faster.</h1>
 </header>
 
 <main>
 
-<p>The end state: two database tables (<code>SystemEvent</code>, <code>IntegrationEvent</code>) that capture every API call, cron run, outbound message, and integration touchpoint — plus middleware so coverage is automatic, a buffered emitter for sibling services, an admin dashboard, and an audit pass to surface gaps.</p>
+<section class="post-body">
+  <p>Over the past 3 years, I've tried out a few different monitoring tools, ultimately landing on Sentry for error monitoring and New Relic for application performance monitoring. They served their purpose providing high level reporting, but I wanted observability into everything happening across our platform.</p>
 
-<p>Reference stack is Next.js + Prisma + PostgreSQL with a sibling Node service. The pattern translates to any framework with request middleware and a database. Phase 8 is optional. Phase 9 is the most important.</p>
+  <p>After a couple of earnest tries to get these tools to fit my use case, I gave up. That was until a couple months ago, when I decided to build in-house the tool I wanted. Using one coding agent, I ran an audit on every call, message, and cron job that is handled across our platform. I leveraged another agent to implement an observability table and trigger a new log for each of these actions. Over the next two weeks, our platform gathered and logged millions of events.</p>
 
-<hr>
+  <p>To make sure our database didn't balloon, I pushed another release to archive stale observability data to S3 and prune our Postgres database. We were able to see the fruits of this rollout immediately. An agent went through our logs to figure out a double-trigger click issue some of our users were experiencing. Within minutes, it had spanned our logs, pinpointed the trail showcasing what kept happening, and suggested a VPN-related idiosyncrasy as the root cause. Later that day, I shipped a fix with idempotency keys. High-fidelity observability leveraged by coding agents has completely changed our bug-fixing workflow. Now, a bug can be fixed in minutes, not hours.</p>
+
+  <p>The next intuitive progression of this bug fixing workflow is self-healing coding agents: creating a recurring cron job that goes through logs each day to proactively find, diagnose, and present solutions to unexpected behavior.</p>
+
+  <p>This engineering workflow is a force multiplier that I highly encourage all engineering teams to invest in. I've shared an agent prompt that should be able to get you 90%+ of the way there — you may need to tweak it given your own stack considerations. Reach out if you have any questions or thoughts on this implementation.</p>
+</section>
+
+<div class="section-break">
+  <p class="eyebrow">The Prompt</p>
+  <h2>Build a Custom Observability System for Your App</h2>
+  <p class="section-dek">Nine prompts to hand a coding agent (Claude Code, Cursor, etc.) one at a time, in order. Reference stack is Next.js + Prisma + PostgreSQL with a sibling Node service — the pattern translates to any framework with request middleware and a database. Phase 8 is optional. Phase 9 is the most important.</p>
+</div>
+
+<section>
 
 <p><strong>Phase 1 — Database schema</strong></p>
 
@@ -408,6 +421,8 @@ Also check for these anti-patterns and flag them:
     "creditCard", "apiKey")
   - logSystemEvent calls with no `metadata` field (you'll lose the
     debugging context you need later)</code></pre>
+
+</section>
 
 </main>
 
