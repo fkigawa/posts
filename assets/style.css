@@ -1,0 +1,362 @@
+:root {
+  --ink: #1a1a1a;
+  --ink-soft: #4a4a4a;
+  --ink-faint: #888;
+  --paper: #faf8f4;
+  --paper-warm: #f3efe7;
+  --rule: #d8d3c8;
+  --rule-soft: #ebe6db;
+  --accent: #2b4a6f;
+  --accent-soft: #e8eef5;
+  --code-bg: #232323;
+  --code-ink: #f0ece4;
+  --code-comment: #a09888;
+  --code-key: #d8b86f;
+  --code-str: #b5c98a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--rule); }
+a:hover { border-bottom-color: var(--accent); }
+
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 64px 32px 96px;
+}
+
+.wrap-wide {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 64px 32px 96px;
+}
+
+header.masthead {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 24px;
+  margin-bottom: 48px;
+}
+
+.eyebrow {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 12px;
+}
+
+h1.title {
+  font-size: 42px;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  letter-spacing: -0.01em;
+}
+
+.dek {
+  font-size: 19px;
+  color: var(--ink-soft);
+  margin: 0;
+  font-style: italic;
+}
+
+.byline {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 13px;
+  color: var(--ink-faint);
+  margin-top: 20px;
+}
+
+.byline a { color: var(--ink-faint); border-bottom-color: var(--rule-soft); }
+
+/* index/landing */
+.post-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.post-list li {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.post-list li:last-child { border-bottom: none; }
+.post-list a.post-link {
+  display: block;
+  border: none;
+  color: var(--ink);
+}
+.post-list h2 {
+  font-size: 24px;
+  margin: 0 0 6px;
+  letter-spacing: -0.005em;
+}
+.post-list .post-meta {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+.post-list .post-summary {
+  color: var(--ink-soft);
+  margin: 0;
+  font-size: 16px;
+}
+
+/* article body */
+article p { margin: 0 0 20px; }
+article h2 {
+  font-size: 28px;
+  margin: 56px 0 16px;
+  letter-spacing: -0.005em;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 8px;
+}
+article h3 {
+  font-size: 20px;
+  margin: 36px 0 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  letter-spacing: 0.01em;
+}
+article ul, article ol {
+  padding-left: 24px;
+  margin: 0 0 20px;
+}
+article li { margin-bottom: 6px; }
+article hr {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 48px 0;
+}
+article blockquote {
+  margin: 24px 0;
+  padding: 16px 20px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink-soft);
+  font-style: italic;
+}
+article blockquote p:last-child { margin-bottom: 0; }
+
+/* code */
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 14px;
+  background: var(--paper-warm);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--rule-soft);
+}
+pre {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: 20px 24px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 24px 0;
+}
+pre code {
+  background: none;
+  padding: 0;
+  border: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* infographic-specific: phase / step cards */
+.phase {
+  position: relative;
+  margin: 36px 0;
+  padding: 28px 32px 28px 88px;
+  background: white;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.phase .phase-num {
+  position: absolute;
+  left: 24px;
+  top: 28px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+.phase.optional .phase-num { background: var(--ink-faint); }
+.phase .phase-title {
+  font-size: 22px;
+  margin: 0 0 6px;
+  letter-spacing: -0.005em;
+}
+.phase .phase-kicker {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+.phase .phase-body { color: var(--ink-soft); }
+.phase .phase-body p:last-child { margin-bottom: 0; }
+.phase .phase-body pre { margin: 16px 0; }
+
+.callout-why {
+  margin: 20px 0 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--ink);
+  background: var(--paper-warm);
+  font-size: 15px;
+  color: var(--ink-soft);
+}
+.callout-why strong { color: var(--ink); }
+
+/* outcomes / checklists at the end */
+.outcomes {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0;
+}
+.outcomes li {
+  padding: 8px 0 8px 28px;
+  position: relative;
+}
+.outcomes li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* stat bar at top of infographic */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  margin: 0 0 48px;
+}
+.stat {
+  background: var(--paper);
+  padding: 20px 16px;
+  text-align: center;
+}
+.stat .stat-num {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1;
+  display: block;
+}
+.stat .stat-label {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  display: block;
+  margin-top: 6px;
+}
+
+/* numbered step (lighter weight than phase, for bedrock-style guides) */
+.step {
+  margin: 28px 0;
+  padding: 22px 26px;
+  background: white;
+  border-left: 4px solid var(--ink);
+  border-top: 1px solid var(--rule-soft);
+  border-right: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+}
+.step h3 {
+  margin-top: 0;
+  font-size: 18px;
+}
+.step .step-num {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 4px;
+}
+
+footer.site-foot {
+  margin-top: 96px;
+  padding-top: 24px;
+  border-top: 1px solid var(--rule);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  color: var(--ink-faint);
+  letter-spacing: 0.05em;
+}
+footer.site-foot a { color: var(--ink-faint); border-bottom-color: var(--rule-soft); }
+
+/* table of contents */
+.toc {
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  padding: 20px 24px;
+  margin: 32px 0 48px;
+  border-radius: 4px;
+}
+.toc h4 {
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+.toc ol { margin: 0; padding-left: 20px; font-size: 15px; }
+.toc ol li { margin-bottom: 2px; }
+.toc a { border-bottom: none; color: var(--ink-soft); }
+.toc a:hover { color: var(--accent); }
+
+.back {
+  display: inline-block;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border: none;
+  margin-bottom: 32px;
+}
+.back:hover { color: var(--accent); }
+
+@media (max-width: 600px) {
+  .wrap, .wrap-wide { padding: 40px 20px 64px; }
+  h1.title { font-size: 32px; }
+  .phase { padding: 24px 20px 24px 20px; }
+  .phase .phase-num {
+    position: static;
+    margin-bottom: 12px;
+  }
+  pre { font-size: 12.5px; padding: 16px; }
+}

@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build a Custom Observability System for Your App — Posts</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="wrap-wide">
+
+<a href="../" class="back">← all posts</a>
+
+<header class="masthead">
+  <p class="eyebrow">Guide · 9 Phases</p>
+  <h1 class="title">Build a Custom Observability System for Your App</h1>
+  <p class="dek">A home-grown event-tracking layer that replaces (or complements) New Relic custom events — two database tables, a fire-and-forget capture function, middleware that wraps every API call, and an admin dashboard you can actually filter on.</p>
+  <p class="byline">A companion piece. Hand the prompts to Claude Code one at a time, in order.</p>
+</header>
+
+<main>
+
+<div class="stats">
+  <div class="stat"><span class="stat-num">9</span><span class="stat-label">Phases</span></div>
+  <div class="stat"><span class="stat-num">2</span><span class="stat-label">DB Tables</span></div>
+  <div class="stat"><span class="stat-num">1</span><span class="stat-label">Audit Pass</span></div>
+  <div class="stat"><span class="stat-num">∞</span><span class="stat-label">Events Captured</span></div>
+</div>
+
+<section>
+<h2>What you'll have at the end</h2>
+
+<p>Two tables in your database:</p>
+<ul>
+  <li><strong><code>SystemEvent</code></strong> — every authenticated API call, every cron job run, every outbound message (SMS/email/etc.), every idempotency replay. Captures route, method, user, duration, error message, stack trace, and a free-form JSON <code>metadata</code> blob.</li>
+  <li><strong><code>IntegrationEvent</code></strong> — every inbound and outbound integration call (EHR, billing, third-party APIs). Captures direction, status, request payload, response payload, status code.</li>
+</ul>
+
+<p>A capture utility that:</p>
+<ul>
+  <li>Never throws (catches its own errors)</li>
+  <li>Never blocks the parent request (fire-and-forget)</li>
+  <li>Sanitizes sensitive fields (passwords, tokens) before logging</li>
+  <li>Captures response bodies even when handlers return 5xx without throwing</li>
+</ul>
+
+<p>Middleware that auto-logs every API call without you adding a single <code>track()</code> call to your handlers.</p>
+
+<p>A buffered emitter for sibling services (Node workers, websocket servers, schedulers) that batches events and POSTs them to your main backend every 5 seconds or every 20 events, whichever comes first.</p>
+
+<p>A query API and admin dashboard with filters for time range, source, type, method, result, user, and environment. Optionally: a retention cron that archives old events to S3 as gzipped JSONL and deletes them from the hot DB.</p>
+</section>
+
+<section>
+<h2>Why this exists (and when to build it)</h2>
+
+<p>APM tools (New Relic, Datadog) are great at aggregate latency and database timing but expensive and awkward for <strong>per-request, per-user audit</strong>. They also don't replay well — once a custom event is sampled out, it's gone.</p>
+
+<p>Build this when you need:</p>
+<ul>
+  <li><strong>Audit trail</strong> — "Did this provider really update that patient yesterday?"</li>
+  <li><strong>Debug context</strong> — "This 500 happened — show me the request body and the user."</li>
+  <li><strong>Cron job health</strong> — "Did the nightly report job actually run last week, and how long did it take?"</li>
+  <li><strong>Integration debugging</strong> — "Show me the exact HL7 payload the EHR sent us, and our response."</li>
+</ul>
+
+<p>If all you need is "p95 latency by route," APM is fine. This is for the other stuff.</p>
+</section>
+
+<section>
+<h2>The Phases</h2>
+
+<div class="toc">
+  <h4>Table of contents</h4>
+  <ol>
+    <li><a href="#phase-1">Database schema</a></li>
+    <li><a href="#phase-2">Capture utility</a></li>
+    <li><a href="#phase-3">Middleware integration (the multiplier)</a></li>
+    <li><a href="#phase-4">Cross-service emitter</a></li>
+    <li><a href="#phase-5">Ingest endpoint</a></li>
+    <li><a href="#phase-6">Query API</a></li>
+    <li><a href="#phase-7">Dashboard UI</a></li>
+    <li><a href="#phase-8">Retention &amp; archival (optional)</a></li>
+    <li><a href="#phase-9">Audit step (do this)</a></li>
+  </ol>
+</div>
+
+<div class="phase" id="phase-1">
+  <div class="phase-num">1</div>
+  <p class="phase-kicker">Schema</p>
+  <h3 class="phase-title">Database schema</h3>
+  <div class="phase-body">
+    <p>Paste this prompt to Claude Code. Run after it finishes.</p>
+<pre><code>Add two new Prisma models to my schema for a custom observability system.
+
+Model 1: SystemEvent — for tracking API calls, cron jobs, automated messages,
+and idempotency replays.
+
+Fields:
+- id (auto-increment int, primary key)
+- type (enum SystemEventType: CRON, MESSAGE, SERVICE_CALL, IDEMPOTENCY_REPLAY)
+- result (enum SystemEventResult: SUCCESS, FAILURE)
+- service (string, nullable) — which service emitted it (e.g. "zeph-web", "zeph-ws-server")
+- environment (string, nullable) — "local", "dev", "production"
+- route (string, nullable)
+- method (string, nullable) — HTTP method
+- userEmail (string, nullable)
+- errorMessage (string, nullable)
+- stackTrace (Text, nullable)
+- taskName (string, nullable) — for cron jobs
+- operation (string, nullable) — sub-operation within a task
+- durationMs (int, nullable)
+- itemsProcessed (int, nullable)
+- metadata (Json, nullable) — free-form structured context
+- createdAt (DateTime, default now())
+- updatedAt (DateTime, @updatedAt)
+
+Indexes: [type], [service], [createdAt]
+
+Model 2: IntegrationEvent — for tracking inbound/outbound integration traffic
+(HL7, billing API, referral systems, any third-party HTTP calls).
+
+Fields:
+- id (auto-increment int, primary key)
+- type (enum IntegrationEventType: REFERRAL, REPORTING, BILLING)
+- direction (enum IntegrationDirection: INBOUND, OUTBOUND)
+- status (enum IntegrationStatus: RECEIVED, ACKED, SENT, DELIVERED, FAILED, REJECTED)
+- endpoint (string, nullable)
+- statusCode (int, nullable)
+- requestPayload (Json, nullable)
+- responsePayload (Json, nullable)
+- workspaceId (int, nullable, relation to Workspace) — replace with whatever your tenant model is
+- createdAt, updatedAt, deletedAt (DateTime, deletedAt nullable for soft delete)
+
+Indexes: [workspaceId], [type, direction, status, createdAt] (composite),
+[deletedAt]
+
+Generate the Prisma migration after editing schema.prisma. Do not run
+`prisma migrate dev` — print the migration command so I can review and run it.</code></pre>
+    <div class="callout-why">
+      <strong>Why these specific enums:</strong> the <code>type</code> field on <code>SystemEvent</code> is what the dashboard groups by. Four values keeps it readable; adding more later is cheap. The composite index on <code>IntegrationEvent</code> matches the most common query: "show me all FAILED outbound BILLING calls from last week."
+    </div>
+  </div>
+</div>
+
+<div class="phase" id="phase-2">
+  <div class="phase-num">2</div>
+  <p class="phase-kicker">Capture</p>
+  <h3 class="phase-title">Capture utility</h3>
+  <div class="phase-body">
+    <p>Paste this prompt next.</p>
+<pre><code>Create a utility module at src/server/system-events.ts (adjust path to wherever
+your server-only code lives).
+
+Export an async function `logSystemEvent(params)` that writes one row to the
+SystemEvent table created in Phase 1.
+
+Critical requirements:
+1. Wrap the entire body in try/catch. NEVER throw — observability failures
+   must not break parent requests. Log to console on failure and swallow.
+2. Default `service` to your main app name (e.g. "zeph-web") if not provided.
+3. Resolve `environment` automatically: read from a helper that returns
+   "local" | "dev" | "production" based on env vars.
+4. If `error` is passed:
+   - If it's an Error instance: extract .message and .stack
+   - Otherwise: String() it as the message, no stack
+5. Pass `metadata` straight through as Prisma Json.
+
+Also export these helpers:
+
+`sanitizeBody(body)` — given a request body, return a shallow copy with any
+field whose name (case-insensitive) contains "password" replaced with
+"[REDACTED]". Returns undefined if body is null or not an object. Add
+"token", "secret", "apiKey" to the sensitive list if you want.
+
+`captureResponseBody(res)` — patches res.json and res.send to capture the
+outgoing body. Returns a getter `() =&gt; unknown` that returns whatever was
+sent. We need this because handlers can return 5xx without throwing — we
+want to log what the client actually saw.
+
+`errorFromResponseBody(statusCode, body)` — if statusCode &gt;= 500, build an
+Error from body.error / body.message / body.details / JSON.stringify(body).
+Returns undefined for non-5xx.
+
+`extractResourceIds(url)` — parse "/api/foo/patients/123/sessions/456" into
+{ patientsId: "123", sessionsId: "456" }. Detect numeric segments following
+a non-numeric segment.
+
+Type the function params with a TypeScript interface that matches the
+SystemEvent fields (excluding id, environment, createdAt, updatedAt, and
+the resolved errorMessage/stackTrace which come from the `error` param).</code></pre>
+    <div class="callout-why">
+      <strong>Why fire-and-forget:</strong> if your observability layer can take down a request, it will, eventually, at the worst possible moment. The <code>try/catch</code> + <code>void logSystemEvent(...)</code> pattern (no <code>await</code> at the call site) means a degraded database can't cascade.
+    </div>
+  </div>
+</div>
+
+<div class="phase" id="phase-3">
+  <div class="phase-num">3</div>
+  <p class="phase-kicker">Multiplier</p>
+  <h3 class="phase-title">Middleware integration</h3>
+  <div class="phase-body">
+    <p>This is where you actually start collecting data. Paste next.</p>
+<pre><code>Wire `logSystemEvent` into my API route auth middleware so every authenticated
+request automatically produces a SystemEvent.
+
+I have an auth middleware (find it — likely src/.../middleware/auth.ts or a
+withAuth wrapper). For each authenticated handler invocation:
+
+1. Record startTime = Date.now() before calling the handler
+2. Wrap res with captureResponseBody to capture outgoing body
+3. Call the handler inside try/catch
+4. On success path:
+   - Use errorFromResponseBody(res.statusCode, getResponseBody()) to detect
+     handler-returned 5xx (no exception thrown)
+   - Call logSystemEvent with type "SERVICE_CALL", result "SUCCESS" if no
+     serverError else "FAILURE", route, method, userEmail (from JWT),
+     durationMs, error, metadata: { source: "web", userId, resourceIds:
+     extractResourceIds(req.url), requestPayload: sanitizeBody(req.body),
+     responseStatus: res.statusCode }
+5. On caught exception:
+   - Call logSystemEvent with type "SERVICE_CALL", result "FAILURE", same
+     fields, error: handlerError
+   - If !res.writableEnded, send a 500 with { error: "Internal server error" }
+
+Use `void logSystemEvent(...)` (no await) so observability never blocks the
+response.
+
+If you have a server-to-server auth middleware (token-auth for sibling
+services), apply the same pattern there — set metadata.source to "server"
+instead of "web".
+
+If you have an idempotency middleware that replays cached responses, log
+those too with type "IDEMPOTENCY_REPLAY", result "SUCCESS", and include
+metadata.idempotencyKey and metadata.cachedStatusCode.
+
+Do not add try/catch around the logSystemEvent calls themselves — that's
+already handled inside the function.</code></pre>
+    <div class="callout-why">
+      <strong>Why middleware not handlers:</strong> if you ask developers to remember to call <code>track()</code> in every endpoint, half of them will forget. Wrapping at the middleware layer means coverage is automatic and consistent.
+    </div>
+  </div>
+</div>
+
+<div class="phase" id="phase-4">
+  <div class="phase-num">4</div>
+  <p class="phase-kicker">Sibling services</p>
+  <h3 class="phase-title">Cross-service emitter</h3>
+  <div class="phase-body">
+    <p>Run this in your sibling service's repo (websocket server, worker, scheduler — anything that's not your main backend). Skip if your whole app is one service.</p>
+<pre><code>Add a buffered event emitter to this service so it can ship events to the
+main backend's SystemEvent table over HTTP.
+
+Create a `trackEvent(eventName, result, metadata)` function in
+src/utils/server-utils.ts (or your equivalent). Behavior:
+
+1. Buffer events in an in-memory array.
+2. Flush triggers:
+   - Buffer reaches 20 events → flush immediately
+   - Otherwise: 5-second debounced timer
+3. Flush = POST { events: [...] } to
+   ${BASE_URL}/api/v2/server/shared/system-events/ingest
+   with Authorization: Bearer ${serverToken}.
+4. On flush failure: re-queue up to 50 events (cap to prevent memory blowup
+   during prolonged backend outage).
+
+Map well-known eventName strings to SystemEvent types:
+  ZephCronJob    → "CRON"
+  ZephMessage    → "MESSAGE"
+  ZephServiceCall → "SERVICE_CALL"
+  ZephApiCall    → "SERVICE_CALL"
+  ZephWebSocket  → undefined (internal, leave null)
+  ZephError      → undefined (internal, leave null)
+
+Replace "Zeph*" with whatever naming convention fits this service.
+
+The buffered event shape should mirror the logSystemEvent params interface
+from Phase 2: type, result, service, environment, route, method, taskName,
+operation, durationMs, itemsProcessed, errorMessage, stackTrace, metadata.
+
+Resolve `environment` the same way as the main backend (env vars).
+Hardcode `service` to this service's name.
+
+Export a `flushEvents()` function so we can force-flush on graceful shutdown.
+
+Then sprinkle `trackEvent` calls at the right places:
+- Every cron job: success at the end with { taskName, durationMs,
+  itemsProcessed, failureCount }; failure on caught exceptions with the
+  same fields plus { error, step }
+- Every outbound message (email, SMS, push): success/failure with
+  { messageType, functionName, recipientType, ...domain ids }
+- Every outbound HTTP call to other services: failures only (success
+  is logged on the receiving side); include { url, method, httpStatus,
+  resourceId, requestPayload, taskName }
+- Every websocket message handler: success at the end with
+  { messageType, ...domain ids }; failure on caught exception</code></pre>
+    <div class="callout-why">
+      <strong>Buffering trade-offs:</strong> the 5-second / 20-event window is tuned for low-volume backends. For high-throughput services, drop the timer to 1 second or raise the batch ceiling — the receiving side caps at 100 per ingest call regardless.
+    </div>
+  </div>
+</div>
+
+<div class="phase" id="phase-5">
+  <div class="phase-num">5</div>
+  <p class="phase-kicker">Receiver</p>
+  <h3 class="phase-title">Ingest endpoint</h3>
+  <div class="phase-body">
+    <p>Run this in the main backend repo if you did Phase 4.</p>
+<pre><code>Create a POST endpoint at /api/v2/server/shared/system-events/ingest (or
+wherever your server-to-server routes live).
+
+Behavior:
+1. Reject non-POST with 405.
+2. Body shape: { events: BufferedEvent[] }. Reject empty array with 400.
+3. Cap batch at 100 events (slice).
+4. Reconstruct an Error-like object per event from { errorMessage, stackTrace }
+   if either is present, otherwise undefined.
+5. Promise.all + logSystemEvent for each event. Default service to the
+   sender's name if not provided in the payload.
+6. Return { accepted: batch.length }.
+
+Protect with your server-to-server auth (the same JWT/secret the sibling
+service already uses). Do NOT use user auth here — these are machine calls.</code></pre>
+  </div>
+</div>
+
+<div class="phase" id="phase-6">
+  <div class="phase-num">6</div>
+  <p class="phase-kicker">Read path</p>
+  <h3 class="phase-title">Query API</h3>
+  <div class="phase-body">
+    <p>Paste next.</p>
+<pre><code>Add three GET endpoints under /api/.../observability/ for querying the
+SystemEvent table. All require admin/audit-log permission — gate behind
+whatever your auth model uses.
+
+1. GET /events — paginated list with filters
+   Query params: type, result, environment, service, taskName, userEmail,
+   method, source (read from metadata.source), search (free-text against
+   route + errorMessage), dateFrom, dateTo (ISO strings), page (default 1),
+   limit (default 50, cap at 200).
+   Return { events: [...], total: number, page, limit }.
+   Order by createdAt desc.
+
+2. GET /summary — aggregated counts
+   Query param: since (e.g. "24 hours ago", "7 days ago" — parse with a
+   library or accept ISO).
+   Return { total, byType: { CRON: n, MESSAGE: n, ... },
+   byResult: { SUCCESS: n, FAILURE: n }, failureRate: number }.
+   Group with prisma.systemEvent.groupBy.
+
+3. GET /cron-status — latest run per distinct taskName
+   Query param: since (default "7 days ago").
+   For each distinct taskName in CRON events within the window, return:
+   { taskName, lastRun: createdAt, lastResult, lastDurationMs,
+     lastItemsProcessed, lastError, totalRuns, failures }
+   Use a single query with DISTINCT ON (Postgres) or a windowed subquery,
+   then enrich with the count aggregates.
+
+Add a similar /integration-events GET endpoint for the IntegrationEvent
+table with filters: type, direction, status, workspaceId, from, to, page,
+pageSize. Same pagination contract.</code></pre>
+  </div>
+</div>
+
+<div class="phase" id="phase-7">
+  <div class="phase-num">7</div>
+  <p class="phase-kicker">Dashboard</p>
+  <h3 class="phase-title">Dashboard UI</h3>
+  <div class="phase-body">
+    <p>Paste next. Adjust the framework references to match your stack.</p>
+<pre><code>Build an admin dashboard page at /management/system-health (or your
+equivalent admin route) that displays SystemEvent rows with filters.
+
+Filter UI (sidebar or top bar):
+- Time range (last 1h / 24h / 7d / 30d / custom)
+- Source (Web, Mobile, Websocket Server, Server) — maps to metadata.source
+- Type (API Call, Cron Job, Message) — maps to SystemEvent.type with
+  human-readable labels
+- Method (GET, POST, PUT, DELETE)
+- Result (Success, Failure)
+- User (autocomplete by email)
+- Environment (local, dev, production)
+- Free-text search box
+
+Result list:
+- 50 per page, paginated
+- Each row shows: timestamp, source badge, type label, route or taskName,
+  user email, duration, result badge (green/red — but use neutral colors
+  by default if your design system avoids destructive red)
+- Expandable detail panel showing: full metadata JSON, error message,
+  stack trace (collapsed by default, "Show stack trace" link)
+- For SERVICE_CALL events: show resource IDs parsed from metadata
+  (e.g. "patient #123, session #456")
+- For CRON events: show taskName, operation, durationMs, itemsProcessed
+- For MESSAGE events: show recipient type, message subtype
+
+Build a reusable hook `useObservabilityEvents(filters, page, limit)` that
+calls the GET /events endpoint, debounces filter changes, and exposes
+{ events, total, loading, error, refetch }.
+
+Build a formatters utility module with:
+- getEventTypeLabel(type): SERVICE_CALL → "API Call", CRON → "Cron Job",
+  MESSAGE → "Automated Message", IDEMPOTENCY_REPLAY → "Idempotency Replay"
+- getEventDetail(row): extracts the most useful one-line summary
+  (method+route for API calls, taskName for cron jobs, message subtype for
+  messages)
+- getResourceLabel(row): formats metadata.resourceIds into "patient #123,
+  session #456"
+- formatDuration(ms): "500ms", "1.2s", "1m 30s"
+- getSourceLabel(row): metadata.source → "Web", "Mobile", "Websocket
+  Server", "Server"
+
+Build an analogous /management/integrations page that uses the
+IntegrationEvent endpoint with filters: type, direction, status, workspace,
+date range. Add a workspace summary row showing inbound/outbound/failed
+counts per workspace.</code></pre>
+  </div>
+</div>
+
+<div class="phase optional" id="phase-8">
+  <div class="phase-num">8</div>
+  <p class="phase-kicker">Optional</p>
+  <h3 class="phase-title">Retention &amp; archival</h3>
+  <div class="phase-body">
+    <blockquote>
+      <p><strong>Skip this phase entirely if you don't already have a cron/scheduled-jobs runner in production.</strong> Don't stand up cron infrastructure just for this — the SystemEvent table will grow but <code>[createdAt]</code> indexing keeps it queryable for a long time. Come back to this when row count becomes a real problem.</p>
+      <p>If you DO have cron (Aptible scheduled containers, Vercel Cron, GitHub Actions schedule, a Node process running <code>node-cron</code>, AWS EventBridge, etc.), paste this prompt.</p>
+    </blockquote>
+<pre><code>Add a retention/archival cron for the SystemEvent table. The endpoint runs
+on a daily schedule from my existing cron runner.
+
+Endpoint: DELETE /api/v2/server/cron/system-events/cleanup
+Protected by server-to-server auth.
+
+Behavior per invocation:
+1. Find SystemEvents with createdAt older than RETENTION_DAYS (default 10,
+   read from env). Process oldest first.
+2. Group rows by UTC day.
+3. For each day: serialize rows as gzipped JSONL, upload to S3 at
+   key `system-events/&lt;environment&gt;/&lt;YYYY-MM-DD&gt;/batch-&lt;n&gt;.jsonl.gz`.
+4. After successful S3 upload, delete the corresponding rows from the DB
+   in the same transaction batch.
+5. Batch size: 5000 rows per iteration.
+6. Time budget: 30 seconds per HTTP call (the cron runner re-invokes daily,
+   so we don't need to drain everything in one shot).
+7. Safety cap: 200 batches per invocation.
+
+Idempotency: if S3 upload succeeds but DB delete fails (rare), record the
+S3 key and have a recovery path that detects orphaned S3 objects on the
+next run and skips re-archiving rows that match.
+
+Return { archived: rowCount, batches: batchCount, timeMs }.
+
+Then track the cron itself with logSystemEvent type CRON, taskName
+"systemEventCleanup", durationMs, itemsProcessed: archived. Yes — the
+cleanup cron logs to the table it's cleaning up. That's fine; its own rows
+get archived next run.
+
+Wire the daily schedule into your existing cron runner (DO NOT add a new
+cron framework). If you don't have one, stop and tell me — we'll skip
+this entirely.</code></pre>
+  </div>
+</div>
+
+<div class="phase" id="phase-9">
+  <div class="phase-num">9</div>
+  <p class="phase-kicker">Most important</p>
+  <h3 class="phase-title">Audit step (do this)</h3>
+  <div class="phase-body">
+    <p>Paste this prompt last to verify you've covered every place an event should be emitted. Skipping this means half-implemented coverage and a dashboard that lies by omission.</p>
+<pre><code>Audit my codebase for places where the custom observability system from
+Phases 1-8 SHOULD be wired up but isn't yet. For each finding, classify it
+as either "missing — should add" or "intentionally skipped — explain why."
+
+Check the following categories. For each, search the codebase and report
+file:line locations:
+
+1. **API auth middleware coverage** — Are ALL my API auth wrappers calling
+   logSystemEvent? Look for any custom auth wrappers, public-API wrappers,
+   webhook receivers, or handler patterns that bypass the main auth
+   middleware. List each unwrapped pattern.
+
+2. **Cron jobs / scheduled tasks** — Find every scheduled task in the
+   codebase (search for cron schedule patterns, setInterval, scheduler
+   handlers, GitHub Actions workflows, AWS EventBridge rules). For each,
+   verify it emits a SystemEvent (or trackEvent) with type CRON, taskName,
+   result, durationMs, and itemsProcessed. List any cron that isn't
+   instrumented. Skip this whole category if Phase 8 was skipped — but
+   still verify cron RUNS get logged even if archival isn't set up.
+
+3. **Outbound messages** — Find every place the app sends an email, SMS,
+   push notification, Slack message, or any user-facing communication.
+   Verify each emits a MESSAGE event with messageType, recipient context,
+   and result. List unlogged senders.
+
+4. **Cross-service HTTP calls** — Find every fetch/axios/got call to
+   external APIs or sibling services. Verify failures emit a SERVICE_CALL
+   event with url, method, httpStatus, requestPayload. (Successes are
+   logged on the receiving side if it's an internal service; for true
+   external APIs, log success too.) List unlogged outbound clients.
+
+5. **Integration events** — Find every place the app reads or writes to an
+   external integration (EHR, billing, referral, third-party API). Verify
+   each writes an IntegrationEvent with type, direction, status, payloads.
+   List unlogged integration touchpoints.
+
+6. **Idempotency middleware** — If you have idempotency middleware, verify
+   every replay path emits IDEMPOTENCY_REPLAY. List any cached-response
+   path that doesn't log.
+
+7. **Background workers / queue consumers** — Find every queue worker, job
+   processor, or background task. Verify each emits SERVICE_CALL or CRON
+   on completion. List unlogged workers.
+
+8. **Websocket / real-time handlers** — If you have a websocket server or
+   SSE endpoints, find every message handler. Verify each emits an event
+   with messageType and result. List unlogged handlers.
+
+For each finding, output:
+  - File path and line number
+  - Category (1-8 above)
+  - Recommended event shape (type, key fields)
+  - Skip reason if intentional
+
+Do NOT make any code changes — this is a report-only pass. After I review
+the report I'll decide which to wire up.
+
+Also check for these anti-patterns and flag them:
+  - `await logSystemEvent(...)` instead of `void logSystemEvent(...)`
+    (will block the request on observability latency)
+  - logSystemEvent calls inside their own try/catch (the function already
+    handles its own errors — wrapping is redundant)
+  - Sensitive fields in metadata.requestPayload that aren't being
+    sanitized (search for "password", "token", "secret", "ssn",
+    "creditCard", "apiKey")
+  - logSystemEvent calls with no `metadata` field (you'll lose the
+    debugging context you need later)</code></pre>
+    <div class="callout-why">
+      <strong>Why audit last:</strong> middleware gives you 80% coverage automatically, but the remaining 20% (crons, message senders, queue workers, integration calls) are the events you most want when something breaks at 2am. Walking the codebase and explicitly checking each category surfaces the gaps that "I think we have observability everywhere" misses.
+    </div>
+  </div>
+</div>
+
+</section>
+
+<section>
+<h2>Operational notes</h2>
+
+<p><strong>Storage:</strong> at moderate volume (~1M API calls/day), <code>SystemEvent</code> grows roughly 1–2 GB/month with full metadata. The <code>[createdAt]</code> index is what keeps queries fast as the table grows. If you skipped Phase 8, plan for 10–20 GB/year and reconsider archival once it hurts.</p>
+
+<p><strong>Index discipline:</strong> every new query pattern in the dashboard should map to an existing index. If you add a filter in Phase 7 that isn't covered by <code>[type]</code>, <code>[service]</code>, or <code>[createdAt]</code>, add an index for it. Don't slow down inserts with indexes you don't query on.</p>
+
+<p><strong>PII:</strong> the <code>metadata.requestPayload</code> field can carry anything the user submitted. The <code>sanitizeBody</code> helper covers obvious passwords; if you store SSNs, payment cards, health identifiers, or anything subject to compliance — extend the sensitive-keys list before turning this on in production.</p>
+
+<p><strong>Failure handling:</strong> a slow database will make <code>logSystemEvent</code> slow, and even though writes are fire-and-forget you'll eventually exhaust the connection pool. Consider a circuit breaker that disables event writes for N seconds after M consecutive failures. Not in the prompts — add it if you see this pattern.</p>
+
+<p><strong>Cost vs APM:</strong> this is cheap to run (just database rows) but expensive to query without good indexes. Keep New Relic / Datadog / Sentry for what they're good at — APM aggregates, error grouping, distributed traces. This system is for the audit-trail and per-event debug needs APM doesn't serve well.</p>
+</section>
+
+<section>
+<h2>What you've built</h2>
+<ul class="outcomes">
+  <li>Two indexed tables capturing API calls, cron runs, messages, and integrations</li>
+  <li>A capture utility that's safe to call from anywhere</li>
+  <li>Middleware coverage so most events flow automatically</li>
+  <li>A buffered emitter for sibling services</li>
+  <li>Query API and admin dashboard with rich filters</li>
+  <li>(Optional) S3 archival to keep the hot table small</li>
+  <li>An explicit audit so you can see exactly where coverage is missing</li>
+</ul>
+<p style="margin-top: 32px; font-style: italic; color: var(--ink-soft);">When something breaks in production, your first stop is now your own dashboard, not Datadog.</p>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <p><a href="../">← all posts</a> · © Francis Kigawa</p>
+</footer>
+
+</div>
+</body>
+</html>
