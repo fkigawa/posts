@@ -31,28 +31,98 @@
 </section>
 
 <div class="section-break">
-  <p class="eyebrow">The Prompt</p>
+  <p class="eyebrow">The Prompts</p>
   <h2>Build a Custom Observability System for Your App</h2>
-  <p class="section-dek">Nine prompts to hand a coding agent (Claude Code, Cursor, etc.) one at a time, in order. Reference stack is Next.js + Prisma + PostgreSQL with a sibling Node service — the pattern translates to any framework with request middleware and a database. Phase 8 is optional. Phase 9 is the most important.</p>
+  <p class="section-dek">Three prompts to hand a coding agent (Claude Code, Cursor, etc.) in order: an audit pass to find every touchpoint, an implementation pass that builds the whole system, and an optional retention/pruning pass. Reference stack is Next.js + Prisma + PostgreSQL with a sibling Node service — translate paths and framework idioms to your own.</p>
 </div>
 
 <section>
 
-<p><strong>Phase 1 — Database schema</strong></p>
+<p><strong>Prompt 1 — Audit</strong> (recon only; do not modify code)</p>
 
-<pre><code>Add two new Prisma models to my schema for a custom observability system.
+<pre><code>Audit my codebase for every place a custom observability system would need
+to capture an event. Output a report I can hand to another agent that will
+implement the system. Do NOT make any code changes — this is a report-only
+pass.
 
-Model 1: SystemEvent — for tracking API calls, cron jobs, automated messages,
-and idempotency replays.
+For each category below, search the codebase and list file:line locations.
+For each finding, include: file path + line, category, what kind of event
+would be emitted (type, key fields), and any notes on edge cases or
+intentional skips.
 
+Categories:
+
+1. **API auth middleware(s)** — Find the main auth/withAuth wrapper that
+   every authenticated API route flows through. List its location. Also
+   look for any custom auth wrappers, public-API wrappers, webhook
+   receivers, or handler patterns that BYPASS the main middleware — these
+   need to be wrapped separately.
+
+2. **Cron jobs / scheduled tasks** — Find every scheduled task (cron
+   schedule patterns, setInterval, scheduler handlers, GitHub Actions
+   workflows, AWS EventBridge rules, Aptible scheduled containers). For
+   each: taskName, what it does, and whether it currently has any logging.
+
+3. **Outbound messages** — Find every place the app sends an email, SMS,
+   push notification, Slack message, or any user-facing communication.
+   Note the message subtype, recipient type, and sender function.
+
+4. **Cross-service HTTP calls** — Find every fetch/axios/got call to
+   external APIs or sibling services. Distinguish internal sibling calls
+   (success logged on receiving side) from true external API calls
+   (success and failure logged here).
+
+5. **Integration touchpoints** — Find every place the app reads or writes
+   to an external integration (EHR, billing, referral, third-party API).
+   These need a separate IntegrationEvent record with direction, status,
+   and full request/response payloads.
+
+6. **Idempotency middleware** — If idempotency middleware exists, find
+   the cached-response replay paths. These need IDEMPOTENCY_REPLAY events.
+
+7. **Background workers / queue consumers** — Find every queue worker,
+   job processor, or background task. Note their entry points.
+
+8. **Websocket / real-time handlers** — If a websocket server or SSE
+   endpoints exist, find every message handler routed by message type.
+
+9. **Existing observability** — Note any existing logging
+   (console.log, Sentry, New Relic custom events, structured logging).
+   Flag anything sensitive being logged un-sanitized (password, token,
+   secret, ssn, creditCard, apiKey).
+
+For each finding, output a row:
+  - file:line
+  - Category (1-9)
+  - Recommended event shape (type, key fields)
+  - Notes / edge cases / intentional skip reason
+
+Finish with a one-paragraph summary: roughly how many events/day this
+system will generate, which areas are highest-value, and any architectural
+gotchas (e.g. "the public-API wrapper doesn't share auth middleware with
+the main app — needs separate instrumentation").</code></pre>
+
+<p><strong>Prompt 2 — Implementation</strong> (build the whole system from the audit findings)</p>
+
+<pre><code>Implement a custom observability system based on the audit report from
+Prompt 1. This is a single comprehensive build. Below is the full
+specification — work through it top to bottom. Reference the audit findings
+to know which routes/crons/messages/integrations need wiring.
+
+## Part A — Database schema (Prisma)
+
+Add two new Prisma models.
+
+Model 1: SystemEvent — for API calls, cron jobs, automated messages,
+idempotency replays.
 Fields:
 - id (auto-increment int, primary key)
 - type (enum SystemEventType: CRON, MESSAGE, SERVICE_CALL, IDEMPOTENCY_REPLAY)
 - result (enum SystemEventResult: SUCCESS, FAILURE)
-- service (string, nullable) — which service emitted it (e.g. "zeph-web", "zeph-ws-server")
-- environment (string, nullable) — "local", "dev", "production"
+- service (string, nullable) — which service emitted it
+- environment (string, nullable) — "local" | "dev" | "production"
 - route (string, nullable)
-- method (string, nullable) — HTTP method
+- method (string, nullable)
 - userEmail (string, nullable)
 - errorMessage (string, nullable)
 - stackTrace (Text, nullable)
@@ -63,83 +133,68 @@ Fields:
 - metadata (Json, nullable) — free-form structured context
 - createdAt (DateTime, default now())
 - updatedAt (DateTime, @updatedAt)
-
 Indexes: [type], [service], [createdAt]
 
-Model 2: IntegrationEvent — for tracking inbound/outbound integration traffic
-(HL7, billing API, referral systems, any third-party HTTP calls).
-
+Model 2: IntegrationEvent — for inbound/outbound integration traffic.
 Fields:
 - id (auto-increment int, primary key)
-- type (enum IntegrationEventType: REFERRAL, REPORTING, BILLING)
+- type (enum IntegrationEventType: REFERRAL, REPORTING, BILLING) — adjust
+  enum values to match the audit findings
 - direction (enum IntegrationDirection: INBOUND, OUTBOUND)
 - status (enum IntegrationStatus: RECEIVED, ACKED, SENT, DELIVERED, FAILED, REJECTED)
 - endpoint (string, nullable)
 - statusCode (int, nullable)
 - requestPayload (Json, nullable)
 - responsePayload (Json, nullable)
-- workspaceId (int, nullable, relation to Workspace) — replace with whatever your tenant model is
-- createdAt, updatedAt, deletedAt (DateTime, deletedAt nullable for soft delete)
+- workspaceId (int, nullable, relation to tenant model — replace with whatever yours is)
+- createdAt, updatedAt, deletedAt (DateTime; deletedAt nullable for soft delete)
+Indexes: [workspaceId], [type, direction, status, createdAt] (composite), [deletedAt]
 
-Indexes: [workspaceId], [type, direction, status, createdAt] (composite),
-[deletedAt]
+Edit schema.prisma and generate the migration. Print the migration command
+for me to run — do NOT auto-run `prisma migrate dev`.
 
-Generate the Prisma migration after editing schema.prisma. Do not run
-`prisma migrate dev` — print the migration command so I can review and run it.</code></pre>
+## Part B — Capture utility
 
-<p><strong>Phase 2 — Capture utility</strong></p>
+Create src/server/system-events.ts (adjust path to wherever your server-only
+code lives).
 
-<pre><code>Create a utility module at src/server/system-events.ts (adjust path to wherever
-your server-only code lives).
-
-Export an async function `logSystemEvent(params)` that writes one row to the
-SystemEvent table created in Phase 1.
+Export async `logSystemEvent(params)` that writes one SystemEvent row.
 
 Critical requirements:
 1. Wrap the entire body in try/catch. NEVER throw — observability failures
-   must not break parent requests. Log to console on failure and swallow.
-2. Default `service` to your main app name (e.g. "zeph-web") if not provided.
-3. Resolve `environment` automatically: read from a helper that returns
-   "local" | "dev" | "production" based on env vars.
+   must not break parent requests. Console-log on failure and swallow.
+2. Default `service` to the main app name if not provided.
+3. Resolve `environment` automatically from a helper that reads env vars.
 4. If `error` is passed:
-   - If it's an Error instance: extract .message and .stack
-   - Otherwise: String() it as the message, no stack
+   - Error instance → extract .message and .stack
+   - Otherwise → String() it as the message, no stack
 5. Pass `metadata` straight through as Prisma Json.
 
-Also export these helpers:
+Also export:
+- `sanitizeBody(body)` — shallow-copy and replace fields whose name
+  (case-insensitive) contains "password", "token", "secret", "apiKey"
+  with "[REDACTED]". Returns undefined if body is null or not an object.
+- `captureResponseBody(res)` — patches res.json and res.send to capture
+  the outgoing body. Returns a getter `() =&gt; unknown`. We need this
+  because handlers can return 5xx without throwing.
+- `errorFromResponseBody(statusCode, body)` — if statusCode &gt;= 500, build
+  an Error from body.error / body.message / body.details / JSON.stringify(body).
+  Returns undefined for non-5xx.
+- `extractResourceIds(url)` — parse "/api/foo/patients/123/sessions/456"
+  into { patientsId: "123", sessionsId: "456" }. Detect numeric segments
+  following non-numeric segments.
 
-`sanitizeBody(body)` — given a request body, return a shallow copy with any
-field whose name (case-insensitive) contains "password" replaced with
-"[REDACTED]". Returns undefined if body is null or not an object. Add
-"token", "secret", "apiKey" to the sensitive list if you want.
+Type the params with a TypeScript interface matching SystemEvent fields
+(excluding id, environment, createdAt, updatedAt, and the resolved
+errorMessage/stackTrace which come from `error`).
 
-`captureResponseBody(res)` — patches res.json and res.send to capture the
-outgoing body. Returns a getter `() =&gt; unknown` that returns whatever was
-sent. We need this because handlers can return 5xx without throwing — we
-want to log what the client actually saw.
+## Part C — Middleware integration (auto-coverage for API routes)
 
-`errorFromResponseBody(statusCode, body)` — if statusCode &gt;= 500, build an
-Error from body.error / body.message / body.details / JSON.stringify(body).
-Returns undefined for non-5xx.
+Wire `logSystemEvent` into the main auth middleware identified in the
+audit. For each authenticated handler invocation:
 
-`extractResourceIds(url)` — parse "/api/foo/patients/123/sessions/456" into
-{ patientsId: "123", sessionsId: "456" }. Detect numeric segments following
-a non-numeric segment.
-
-Type the function params with a TypeScript interface that matches the
-SystemEvent fields (excluding id, environment, createdAt, updatedAt, and
-the resolved errorMessage/stackTrace which come from the `error` param).</code></pre>
-
-<p><strong>Phase 3 — Middleware integration</strong></p>
-
-<pre><code>Wire `logSystemEvent` into my API route auth middleware so every authenticated
-request automatically produces a SystemEvent.
-
-I have an auth middleware (find it — likely src/.../middleware/auth.ts or a
-withAuth wrapper). For each authenticated handler invocation:
-
-1. Record startTime = Date.now() before calling the handler
-2. Wrap res with captureResponseBody to capture outgoing body
+1. startTime = Date.now() before calling the handler
+2. Wrap res with captureResponseBody
 3. Call the handler inside try/catch
 4. On success path:
    - Use errorFromResponseBody(res.statusCode, getResponseBody()) to detect
@@ -150,177 +205,165 @@ withAuth wrapper). For each authenticated handler invocation:
      extractResourceIds(req.url), requestPayload: sanitizeBody(req.body),
      responseStatus: res.statusCode }
 5. On caught exception:
-   - Call logSystemEvent with type "SERVICE_CALL", result "FAILURE", same
-     fields, error: handlerError
+   - logSystemEvent with type "SERVICE_CALL", result "FAILURE", same fields,
+     error: handlerError
    - If !res.writableEnded, send a 500 with { error: "Internal server error" }
 
 Use `void logSystemEvent(...)` (no await) so observability never blocks the
-response.
+response. Do NOT wrap the logSystemEvent calls in try/catch — the function
+handles its own errors.
 
-If you have a server-to-server auth middleware (token-auth for sibling
-services), apply the same pattern there — set metadata.source to "server"
-instead of "web".
+If the audit found additional auth wrappers (server-to-server, public-API,
+webhook receivers): apply the same pattern. For server-to-server set
+metadata.source to "server"; for public-API set it to "public".
 
-If you have an idempotency middleware that replays cached responses, log
-those too with type "IDEMPOTENCY_REPLAY", result "SUCCESS", and include
-metadata.idempotencyKey and metadata.cachedStatusCode.
+If the audit found idempotency middleware: log every replay path with type
+"IDEMPOTENCY_REPLAY", result "SUCCESS", metadata.idempotencyKey and
+metadata.cachedStatusCode.
 
-Do not add try/catch around the logSystemEvent calls themselves — that's
-already handled inside the function.</code></pre>
+## Part D — Cross-service emitter (skip if single-service)
 
-<p><strong>Phase 4 — Cross-service emitter</strong> (skip if you only have one service; otherwise run this in the sibling service's repo)</p>
+If the audit identified sibling services (websocket server, workers,
+schedulers), add a buffered emitter to each.
 
-<pre><code>Add a buffered event emitter to this service so it can ship events to the
-main backend's SystemEvent table over HTTP.
-
-Create a `trackEvent(eventName, result, metadata)` function in
+Create `trackEvent(eventName, result, metadata)` in
 src/utils/server-utils.ts (or your equivalent). Behavior:
-
 1. Buffer events in an in-memory array.
-2. Flush triggers:
-   - Buffer reaches 20 events → flush immediately
-   - Otherwise: 5-second debounced timer
+2. Flush triggers: buffer reaches 20 events → flush immediately; otherwise
+   5-second debounced timer.
 3. Flush = POST { events: [...] } to
-   ${BASE_URL}/api/v2/server/shared/system-events/ingest
-   with Authorization: Bearer ${serverToken}.
-4. On flush failure: re-queue up to 50 events (cap to prevent memory blowup
-   during prolonged backend outage).
+   ${BASE_URL}/api/v2/server/shared/system-events/ingest with
+   Authorization: Bearer ${serverToken}.
+4. On flush failure: re-queue up to 50 events (cap to prevent memory
+   blowup during prolonged backend outage).
 
-Map well-known eventName strings to SystemEvent types:
-  ZephCronJob    → "CRON"
-  ZephMessage    → "MESSAGE"
+Map well-known eventName strings to SystemEvent types (rename "Zeph*" to
+fit your service):
+  ZephCronJob     → "CRON"
+  ZephMessage     → "MESSAGE"
   ZephServiceCall → "SERVICE_CALL"
-  ZephApiCall    → "SERVICE_CALL"
-  ZephWebSocket  → undefined (internal, leave null)
-  ZephError      → undefined (internal, leave null)
+  ZephApiCall     → "SERVICE_CALL"
+  ZephWebSocket   → undefined (internal, leave null)
+  ZephError       → undefined (internal, leave null)
 
-Replace "Zeph*" with whatever naming convention fits this service.
+Buffered event shape mirrors the logSystemEvent params interface. Resolve
+`environment` the same way as the main backend. Hardcode `service` to this
+service's name. Export `flushEvents()` for graceful-shutdown flush.
 
-The buffered event shape should mirror the logSystemEvent params interface
-from Phase 2: type, result, service, environment, route, method, taskName,
-operation, durationMs, itemsProcessed, errorMessage, stackTrace, metadata.
+Then add `trackEvent` calls at every location the audit identified:
+- Cron jobs: success at end with { taskName, durationMs, itemsProcessed,
+  failureCount }; failure on caught exceptions with same fields plus
+  { error, step }
+- Outbound messages: success/failure with { messageType, functionName,
+  recipientType, ...domain ids }
+- Outbound HTTP calls to other services: failures only (success logged on
+  receiving side); include { url, method, httpStatus, resourceId,
+  requestPayload, taskName }
+- Websocket message handlers: success at end with { messageType,
+  ...domain ids }; failure on caught exception
 
-Resolve `environment` the same way as the main backend (env vars).
-Hardcode `service` to this service's name.
+Also build the receiving endpoint in the main backend:
+POST /api/v2/server/shared/system-events/ingest
+- Reject non-POST with 405
+- Body: { events: BufferedEvent[] }; reject empty array with 400
+- Cap batch at 100 events (slice)
+- Reconstruct Error-like object per event from { errorMessage, stackTrace }
+- Promise.all + logSystemEvent for each. Default service to sender's name.
+- Return { accepted: batch.length }
+- Protect with server-to-server auth (NOT user auth)
 
-Export a `flushEvents()` function so we can force-flush on graceful shutdown.
+## Part E — Integration events
 
-Then sprinkle `trackEvent` calls at the right places:
-- Every cron job: success at the end with { taskName, durationMs,
-  itemsProcessed, failureCount }; failure on caught exceptions with the
-  same fields plus { error, step }
-- Every outbound message (email, SMS, push): success/failure with
-  { messageType, functionName, recipientType, ...domain ids }
-- Every outbound HTTP call to other services: failures only (success
-  is logged on the receiving side); include { url, method, httpStatus,
-  resourceId, requestPayload, taskName }
-- Every websocket message handler: success at the end with
-  { messageType, ...domain ids }; failure on caught exception</code></pre>
+For every integration touchpoint the audit identified, wrap the call site
+to write an IntegrationEvent with type, direction, status, endpoint,
+statusCode, full requestPayload and responsePayload, workspaceId. Both
+inbound (we receive) and outbound (we send) directions.
 
-<p><strong>Phase 5 — Ingest endpoint</strong> (main backend repo, if you did Phase 4)</p>
+## Part F — Query API
 
-<pre><code>Create a POST endpoint at /api/v2/server/shared/system-events/ingest (or
-wherever your server-to-server routes live).
-
-Behavior:
-1. Reject non-POST with 405.
-2. Body shape: { events: BufferedEvent[] }. Reject empty array with 400.
-3. Cap batch at 100 events (slice).
-4. Reconstruct an Error-like object per event from { errorMessage, stackTrace }
-   if either is present, otherwise undefined.
-5. Promise.all + logSystemEvent for each event. Default service to the
-   sender's name if not provided in the payload.
-6. Return { accepted: batch.length }.
-
-Protect with your server-to-server auth (the same JWT/secret the sibling
-service already uses). Do NOT use user auth here — these are machine calls.</code></pre>
-
-<p><strong>Phase 6 — Query API</strong></p>
-
-<pre><code>Add three GET endpoints under /api/.../observability/ for querying the
-SystemEvent table. All require admin/audit-log permission — gate behind
-whatever your auth model uses.
+Add three GET endpoints under /api/.../observability/. All require
+admin/audit-log permission — gate behind whatever your auth model uses.
 
 1. GET /events — paginated list with filters
    Query params: type, result, environment, service, taskName, userEmail,
    method, source (read from metadata.source), search (free-text against
-   route + errorMessage), dateFrom, dateTo (ISO strings), page (default 1),
+   route + errorMessage), dateFrom, dateTo (ISO), page (default 1),
    limit (default 50, cap at 200).
-   Return { events: [...], total: number, page, limit }.
-   Order by createdAt desc.
+   Return { events: [...], total, page, limit }. Order by createdAt desc.
 
-2. GET /summary — aggregated counts
-   Query param: since (e.g. "24 hours ago", "7 days ago" — parse with a
-   library or accept ISO).
+2. GET /summary — aggregated counts since a given window
+   Query param: since (parse "24 hours ago" / "7 days ago" / ISO).
    Return { total, byType: { CRON: n, MESSAGE: n, ... },
-   byResult: { SUCCESS: n, FAILURE: n }, failureRate: number }.
-   Group with prisma.systemEvent.groupBy.
+   byResult: { SUCCESS: n, FAILURE: n }, failureRate }.
+   Use prisma.systemEvent.groupBy.
 
-3. GET /cron-status — latest run per distinct taskName
+3. GET /cron-status — latest run per distinct taskName in the window
    Query param: since (default "7 days ago").
-   For each distinct taskName in CRON events within the window, return:
-   { taskName, lastRun: createdAt, lastResult, lastDurationMs,
-     lastItemsProcessed, lastError, totalRuns, failures }
-   Use a single query with DISTINCT ON (Postgres) or a windowed subquery,
-   then enrich with the count aggregates.
+   For each distinct taskName: { taskName, lastRun, lastResult,
+   lastDurationMs, lastItemsProcessed, lastError, totalRuns, failures }.
+   Use DISTINCT ON (Postgres) or windowed subquery, enriched with counts.
 
-Add a similar /integration-events GET endpoint for the IntegrationEvent
-table with filters: type, direction, status, workspaceId, from, to, page,
-pageSize. Same pagination contract.</code></pre>
+Add a /integration-events GET endpoint mirroring (1) but for
+IntegrationEvent: type, direction, status, workspaceId, from, to, page,
+pageSize. Same pagination contract.
 
-<p><strong>Phase 7 — Dashboard UI</strong></p>
+## Part G — Dashboard UI
 
-<pre><code>Build an admin dashboard page at /management/system-health (or your
-equivalent admin route) that displays SystemEvent rows with filters.
+Build an admin page at /management/system-health (or your equivalent admin
+route) showing SystemEvent rows with filters.
 
 Filter UI (sidebar or top bar):
 - Time range (last 1h / 24h / 7d / 30d / custom)
 - Source (Web, Mobile, Websocket Server, Server) — maps to metadata.source
-- Type (API Call, Cron Job, Message) — maps to SystemEvent.type with
-  human-readable labels
-- Method (GET, POST, PUT, DELETE)
-- Result (Success, Failure)
-- User (autocomplete by email)
-- Environment (local, dev, production)
-- Free-text search box
+- Type (API Call, Cron Job, Message) — maps to SystemEvent.type
+- Method, Result, User (autocomplete by email), Environment, free-text
 
 Result list:
 - 50 per page, paginated
-- Each row shows: timestamp, source badge, type label, route or taskName,
-  user email, duration, result badge (use neutral colors by default if your
-  design system avoids destructive red)
-- Expandable detail panel showing: full metadata JSON, error message,
-  stack trace (collapsed by default, "Show stack trace" link)
-- For SERVICE_CALL events: show resource IDs parsed from metadata
-  (e.g. "patient #123, session #456")
-- For CRON events: show taskName, operation, durationMs, itemsProcessed
-- For MESSAGE events: show recipient type, message subtype
+- Each row: timestamp, source badge, type label, route or taskName,
+  user email, duration, result badge (neutral colors by default — avoid
+  destructive red if your design system avoids it)
+- Expandable detail panel: full metadata JSON, error message, stack
+  trace (collapsed by default, "Show stack trace" link)
+- For SERVICE_CALL: show resource IDs parsed from metadata
+- For CRON: show taskName, operation, durationMs, itemsProcessed
+- For MESSAGE: show recipient type, message subtype
 
-Build a reusable hook `useObservabilityEvents(filters, page, limit)` that
-calls the GET /events endpoint, debounces filter changes, and exposes
-{ events, total, loading, error, refetch }.
+Build a reusable hook `useObservabilityEvents(filters, page, limit)`
+calling GET /events, with debounced filter changes, exposing { events,
+total, loading, error, refetch }.
 
-Build a formatters utility module with:
+Build a formatters module with:
 - getEventTypeLabel(type): SERVICE_CALL → "API Call", CRON → "Cron Job",
   MESSAGE → "Automated Message", IDEMPOTENCY_REPLAY → "Idempotency Replay"
-- getEventDetail(row): extracts the most useful one-line summary
-  (method+route for API calls, taskName for cron jobs, message subtype for
-  messages)
-- getResourceLabel(row): formats metadata.resourceIds into "patient #123,
-  session #456"
+- getEventDetail(row): one-line summary (method+route for API calls,
+  taskName for crons, message subtype for messages)
+- getResourceLabel(row): metadata.resourceIds → "patient #123, session #456"
 - formatDuration(ms): "500ms", "1.2s", "1m 30s"
-- getSourceLabel(row): metadata.source → "Web", "Mobile", "Websocket
-  Server", "Server"
+- getSourceLabel(row): metadata.source → "Web" / "Mobile" / "Websocket
+  Server" / "Server"
 
-Build an analogous /management/integrations page that uses the
+Add an analogous /management/integrations page using the
 IntegrationEvent endpoint with filters: type, direction, status, workspace,
-date range. Add a workspace summary row showing inbound/outbound/failed
-counts per workspace.</code></pre>
+date range. Show a workspace summary row (inbound/outbound/failed counts
+per workspace).
 
-<p><strong>Phase 8 — Retention &amp; archival</strong> (optional; skip if you don't already have a cron runner in production)</p>
+## Wrap-up
 
-<pre><code>Add a retention/archival cron for the SystemEvent table. The endpoint runs
-on a daily schedule from my existing cron runner.
+After implementation, re-run the audit from Prompt 1 and confirm every
+finding is now wired (or explicitly skipped with a reason). Flag any
+remaining anti-patterns:
+- `await logSystemEvent(...)` instead of `void logSystemEvent(...)`
+- logSystemEvent calls wrapped in their own try/catch (redundant)
+- Sensitive fields in metadata.requestPayload not being sanitized
+- logSystemEvent calls with no `metadata` field</code></pre>
+
+<p><strong>Prompt 3 — Retention &amp; pruning</strong> (optional; only if you already have a cron runner in production)</p>
+
+<pre><code>Add a retention/archival cron for the SystemEvent table. Skip this entire
+prompt if I don't already have a cron runner (Aptible scheduled containers,
+Vercel Cron, GitHub Actions schedule, node-cron process, AWS EventBridge,
+etc.) — do NOT stand up new cron infrastructure just for this.
 
 Endpoint: DELETE /api/v2/server/cron/system-events/cleanup
 Protected by server-to-server auth.
@@ -329,13 +372,13 @@ Behavior per invocation:
 1. Find SystemEvents with createdAt older than RETENTION_DAYS (default 10,
    read from env). Process oldest first.
 2. Group rows by UTC day.
-3. For each day: serialize rows as gzipped JSONL, upload to S3 at
-   key `system-events/&lt;environment&gt;/&lt;YYYY-MM-DD&gt;/batch-&lt;n&gt;.jsonl.gz`.
+3. For each day: serialize rows as gzipped JSONL, upload to S3 at key
+   `system-events/&lt;environment&gt;/&lt;YYYY-MM-DD&gt;/batch-&lt;n&gt;.jsonl.gz`.
 4. After successful S3 upload, delete the corresponding rows from the DB
    in the same transaction batch.
 5. Batch size: 5000 rows per iteration.
-6. Time budget: 30 seconds per HTTP call (the cron runner re-invokes daily,
-   so we don't need to drain everything in one shot).
+6. Time budget: 30 seconds per HTTP call (the cron re-invokes daily, so
+   don't need to drain everything in one shot).
 7. Safety cap: 200 batches per invocation.
 
 Idempotency: if S3 upload succeeds but DB delete fails (rare), record the
@@ -344,83 +387,13 @@ next run and skips re-archiving rows that match.
 
 Return { archived: rowCount, batches: batchCount, timeMs }.
 
-Then track the cron itself with logSystemEvent type CRON, taskName
+Track the cron itself with logSystemEvent type CRON, taskName
 "systemEventCleanup", durationMs, itemsProcessed: archived. Yes — the
-cleanup cron logs to the table it's cleaning up. That's fine; its own rows
-get archived next run.
+cleanup cron logs to the table it's cleaning up. Its own rows get archived
+next run.
 
-Wire the daily schedule into your existing cron runner (DO NOT add a new
-cron framework). If you don't have one, stop and tell me — we'll skip
-this entirely.</code></pre>
-
-<p><strong>Phase 9 — Audit step</strong> (do this — middleware gives you 80% coverage automatically; the remaining 20% is the events you most want at 2am)</p>
-
-<pre><code>Audit my codebase for places where the custom observability system from
-Phases 1-8 SHOULD be wired up but isn't yet. For each finding, classify it
-as either "missing — should add" or "intentionally skipped — explain why."
-
-Check the following categories. For each, search the codebase and report
-file:line locations:
-
-1. **API auth middleware coverage** — Are ALL my API auth wrappers calling
-   logSystemEvent? Look for any custom auth wrappers, public-API wrappers,
-   webhook receivers, or handler patterns that bypass the main auth
-   middleware. List each unwrapped pattern.
-
-2. **Cron jobs / scheduled tasks** — Find every scheduled task in the
-   codebase (search for cron schedule patterns, setInterval, scheduler
-   handlers, GitHub Actions workflows, AWS EventBridge rules). For each,
-   verify it emits a SystemEvent (or trackEvent) with type CRON, taskName,
-   result, durationMs, and itemsProcessed. List any cron that isn't
-   instrumented.
-
-3. **Outbound messages** — Find every place the app sends an email, SMS,
-   push notification, Slack message, or any user-facing communication.
-   Verify each emits a MESSAGE event with messageType, recipient context,
-   and result. List unlogged senders.
-
-4. **Cross-service HTTP calls** — Find every fetch/axios/got call to
-   external APIs or sibling services. Verify failures emit a SERVICE_CALL
-   event with url, method, httpStatus, requestPayload. (Successes are
-   logged on the receiving side if it's an internal service; for true
-   external APIs, log success too.) List unlogged outbound clients.
-
-5. **Integration events** — Find every place the app reads or writes to an
-   external integration (EHR, billing, referral, third-party API). Verify
-   each writes an IntegrationEvent with type, direction, status, payloads.
-   List unlogged integration touchpoints.
-
-6. **Idempotency middleware** — If you have idempotency middleware, verify
-   every replay path emits IDEMPOTENCY_REPLAY. List any cached-response
-   path that doesn't log.
-
-7. **Background workers / queue consumers** — Find every queue worker, job
-   processor, or background task. Verify each emits SERVICE_CALL or CRON
-   on completion. List unlogged workers.
-
-8. **Websocket / real-time handlers** — If you have a websocket server or
-   SSE endpoints, find every message handler. Verify each emits an event
-   with messageType and result. List unlogged handlers.
-
-For each finding, output:
-  - File path and line number
-  - Category (1-8 above)
-  - Recommended event shape (type, key fields)
-  - Skip reason if intentional
-
-Do NOT make any code changes — this is a report-only pass. After I review
-the report I'll decide which to wire up.
-
-Also check for these anti-patterns and flag them:
-  - `await logSystemEvent(...)` instead of `void logSystemEvent(...)`
-    (will block the request on observability latency)
-  - logSystemEvent calls inside their own try/catch (the function already
-    handles its own errors — wrapping is redundant)
-  - Sensitive fields in metadata.requestPayload that aren't being
-    sanitized (search for "password", "token", "secret", "ssn",
-    "creditCard", "apiKey")
-  - logSystemEvent calls with no `metadata` field (you'll lose the
-    debugging context you need later)</code></pre>
+Wire the daily schedule into the existing cron runner (do NOT add a new
+cron framework). If I don't have one, stop and tell me — we'll skip this.</code></pre>
 
 </section>
 
