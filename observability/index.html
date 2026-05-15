@@ -14,12 +14,13 @@
 <header class="masthead">
   <p class="eyebrow">Post · May 2026</p>
   <h1 class="title">In-House Observability</h1>
-  <p class="dek">I spent 1 day building out in-house observability, and now I can diagnose and fix bugs 100x faster.</p>
 </header>
 
 <main>
 
 <section class="post-body">
+  <p class="lead">I spent 1 day building out in-house observability, and now I can diagnose and fix bugs 100x faster.</p>
+
   <p>Over the past 3 years, I've tried out a few different monitoring tools, ultimately landing on Sentry for error monitoring and New Relic for application performance monitoring. They served their purpose providing high level reporting, but I wanted observability into everything happening across our platform.</p>
 
   <p>After a couple of earnest tries to get these tools to fit my use case, I gave up. That was until a couple months ago, when I decided to build in-house the tool I wanted. Using one coding agent, I ran an audit on every call, message, and cron job that is handled across our platform. I leveraged another agent to implement an observability table and trigger a new log for each of these actions. Over the next two weeks, our platform gathered and logged millions of events.</p>
