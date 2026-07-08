@@ -1,5 +1,9 @@
-# posts
+# Zeph Product & Billing Reference
 
-Supplementary material for articles I write — guides, deep-dives, and the parts that didn't fit. Published as a GitHub Pages site.
+A single-page reference mapping Zeph Health's products to their CPT billing codes,
+the customers each configuration applies to, the care schedules that drive billing,
+and the reports that go out.
 
-Add a new post by creating `/<slug>/index.html` (reuse `/assets/style.css`) and linking it from the root `index.html`.
+Published via GitHub Pages: **https://fkigawa.github.io/posts/**
+
+The page is a self-contained `index.html` (inline CSS, no build step, light/dark aware).
